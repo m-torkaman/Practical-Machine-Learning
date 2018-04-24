@@ -1,0 +1,205 @@
+---
+title: "Wearable Computing"
+author: "Meysam Torkaman"
+date: "24/04/2018"
+output:
+  html_document: default
+  word_document: default
+  pdf_document: default
+keep_md: TRUE
+keep_rmd: TRUE
+Language: English
+---
+## Executive Summary
+One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants.
+
+## Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+### Data
+
+The training data for this project are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har. If you use the document you create for this class for any purpose please cite them as they have been very generous in allowing their data to be used for this kind of assignment.
+
+### What you should submit
+
+The goal of your project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. You may use any of the other variables to predict with. You should create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. You will also use your prediction model to predict 20 different test cases.
+
+## Approach
+
+the general strategy in order to find a best model for predicting how well participants did their exercise is:   
+  1) Loading and cleaning the data sets.
+  2) Splitting the train data set into 2 separate parts, namely training and testing. 
+  3) Fitting several different models to our training set and comparing their accuracy on the testing set.
+  4) Choosing the best model(s), and calculating out of sample error rate
+  5) Solving the problem of the assignment test data set's 20 observation for the quiz.
+  
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(fig.width=8, fig.height=4, echo=TRUE, warning = FALSE, message = FALSE, error = FALSE, cache = TRUE)
+```
+```{r loading_packages, include=TRUE, warning=FALSE,  message = FALSE, error = FALSE}
+## Loading libraries
+library(data.table)
+library(caret)
+library(ggplot2)
+library(rattle)
+library(parallel)
+library(doParallel)
+```
+
+### Loading data
+
+```{r read_data, cache=TRUE}
+
+URL_training <- c("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv")
+
+URL_testing <- c("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv")
+
+pml_training <- read.table(URL_training, header = TRUE, sep=",", stringsAsFactors = FALSE, na.strings = c(NA, "#DIV/0!", ""))
+
+pml_testing <- read.table(URL_testing, header = TRUE, sep=",", stringsAsFactors = FALSE, na.strings = c(NA, "#DIV/0!", ""))
+dim(pml_training)
+dim(pml_testing)
+```
+
+### Cleaning data
+
+in order to clean the data, all the columns with more than 95% NAs is ommited. In addition, columns 1-6 are removed from the data set to prevent interferring with the model fitting, since those columns have nothing to do with our predictions.
+
+```{r cleaning_data, cache = TRUE}
+
+for (i in 1:160) class(pml_testing[,i]) <- class(pml_training[,i])
+
+## Ommiting naer zero variables and columns 1-6  
+na_var <- numeric()
+for(i in 1:160) na_var[i] <- sum(is.na(pml_training[, i]))/dim(pml_training)[1]
+temp1 <- pml_training[  ,c(na_var<0.95)]
+train <- temp1[,-c(1:6)]
+
+temp2 <- pml_testing[,c(na_var<0.95)]
+test <- temp2[,-c(1:6)]
+
+rm(temp1, temp2, na_var)
+dim(train) 
+dim(test)
+```
+
+for the purpose of Reproducibility, we set seeds when partitioning our data set into training and testing data sets, with 70% of the train data set goes to training and 30% goes to testing data sets. 
+
+```{r data_partitioning, cache=TRUE}
+set.seed(1234)
+
+inTrain <- createDataPartition(y=train$classe, p = 0.70, list = FALSE)
+training <- train[inTrain,]
+testing <- train[-inTrain,]
+```
+
+## Models fitting
+
+In this step, several different non-linear models, namely Random Forest, CART, Linear Discrimenent Analysis, Boosting and Naive Bayes are fitted to the trainig data set. non-linear models are used because of the high number of covariates (53 in this case), which suggests non-linear relationship between <i>classe</i> and other variables.  
+Since some of the model fittings are slow, in order to make the computation faster the Parallel computing is performed on both cores. 
+In Addition, the resampling method is changed from the diffult of bootstrapping, to 5- fold Cross-Validation. The impact of this change is to reduce the number of samples against which the random forest algorithm is run from 25 to 5, and to change each sample's composition from leave one out to randomly selected training folds.  
+
+```{r models_fitting, cache=TRUE}
+## setting cluster for allowing parallel computing
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+fitControl <- trainControl(method = "cv",
+                           number = 5,
+                           allowParallel = TRUE)
+## fitting several different models
+set.seed(4321)
+fit_rf <- train(classe ~ ., method="rf", data=training, trControl = fitControl)
+
+fit_rpart <- train(classe ~ ., method="rpart", data=training, trControl = fitControl)
+
+fit_lda <- train(classe ~ ., method="lda", data=training, trControl = fitControl)
+ 
+
+fit_gbm <- train(classe ~ ., method="gbm", data=training, trControl = fitControl, verbose=FALSE)
+ 
+
+fit_nb <- train(classe ~ ., method="nb", data=training, trControl = fitControl)
+ 
+## shutting down the cluster in order to ell R to return to single threaded processing
+stopCluster(cluster)
+registerDoSEQ() 
+```
+
+## Model selection and out-of-sample error rate
+
+based on the fitted models, the predictions are pefromed on the testing data set in order to get the accuracy of each model. 
+
+since each observation in the test data set is independent of the others, if <b>A</b> represents the accuracy of a machine learning model, then the probability of correctly predicting 20 out of 20 test cases with the model in question is <b>A^20</b>, because the probability of the total is equal to the product of the independent probabilities. hence, the model accuracy should be at least <b>99.4%</b> in order to get approximately <b>90%</b> correct prediction on the 20 observations in the test data set.
+
+```{r model_selection}
+pred_rf <- predict(fit_rf, newdata=testing)
+pred_rpart <- predict(fit_rpart, testing)
+pred_lda <- predict(fit_lda, testing)
+pred_gbm <- predict(fit_gbm, testing)
+pred_nb <- predict(fit_nb, testing)
+
+confusion_rf <- confusionMatrix(pred_rf, as.factor(testing$classe)) 
+confusion_rpart <- confusionMatrix(pred_rpart, as.factor(testing$classe))
+confusion_lda <- confusionMatrix(pred_lda, as.factor(testing$classe))
+confusion_gbm <- confusionMatrix(pred_gbm, as.factor(testing$classe))
+confusion_nb <- confusionMatrix(pred_nb, as.factor(testing$classe))
+
+models_accuracy <- data.frame( Model=c("NB", "GBM", "LDA", "CART", "RF"),Accuracy=c(confusion_nb$overall[1],confusion_gbm$overall[1], confusion_lda$overall[1], confusion_rpart$overall[1], confusion_rf$overall[1]))
+
+models_accuracy
+
+```
+
+As shown above and by comparing the models accuracy, it is fair to conclude that among different models used in this analysis, the top performers are Random Forest and Boosting models with approximately <b>99.81%</b> accuracy for Random Forest and <b>98.91%</b> for Bossting model.
+
+So, the out-of-sample for RF would be <b>0.9981^20= 96.26%</b>, while for Bossting it is <b>0.9891^20 = 80.31%</b>.
+
+Although the Random Forest performed better than Boosting, <i>system.time</i> for Bossting is approximately 40% lesser than Random Forest's (suggesting that the Boosting is faster), while the predictions on the 20 observation of the test set are exactly the same, as shown bellow:
+
+```{r system_time}
+## Random Forest system.time
+##  user    system  elapsed 
+##  59.53    2.37    458.18 
+
+## Boosting system.time
+##  user    system  elapsed 
+##  33.37    1.51    174.21
+```
+
+```{r selected_model}
+##Predicting 20 observation in the test data set using Random Forest model
+predictTest_rf <- predict(fit_rf, test)
+structure(as.character(predictTest_rf), names= test$problem_id)
+
+##Predicting 20 observation in the test data set using Boosting model
+predictTest_gbm <- predict(fit_gbm, test)
+structure(as.character(predictTest_gbm), names= test$problem_id)
+
+```
+
+### Appendix
+
+Plotting the decision tree from the CART model: 
+
+```{r plotting}
+fancyRpartPlot(fit_rpart$finalModel)
+
+```
+
+Selected models details:
+
+```{r selected_models_fit}
+## Boosting model
+fit_gbm
+## Random Forest model
+fit_rf
+```
